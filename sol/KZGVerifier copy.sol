@@ -5,7 +5,7 @@ pragma solidity ^0.5.0;
 import "./Pairing.sol";
 import {Constants} from "./Constants.sol";
 
-contract Verifier is Constants {
+contract Verifier2 is Constants {
     using Pairing for *;
 
     // The G1 generator
@@ -25,26 +25,12 @@ contract Verifier is Constants {
         Y: [Constants.SRS_G2_Y_0[1], Constants.SRS_G2_Y_1[1]]
     });
 
-    /*
-     * Verifies a single-point evaluation of a polynominal using the KZG
-     * commitment scheme.
-     *    - p(X) is a polynominal
-     *    - _value = p(_index)
-     *    - commitment = commit(p)
-     *    - proof = genProof(p, _index, _value)
-     * Returns true if and only if the following holds, and returns false
-     * otherwise:
-     *     e(commitment - commit([_value]), G2.g) == e(proof, commit([0, 1]) - zCommit)
-     * @param _commitment The KZG polynominal commitment.
-     * @param _proof The proof.
-     * @param _index The x-value at which to evaluate the polynominal.
-     * @param _value The result of the polynominal evaluation.
-     */
     function verify(
         Pairing.G1Point memory _commitment,
         Pairing.G1Point memory _proof,
         uint256 _index,
-        uint256 _value
+        Pairing.G1Point memory _value,
+        Pairing.G2Point memory _pk2
     ) public view returns (bool) {
         // Make sure each parameter is less than the prime q
         require(
@@ -68,101 +54,83 @@ contract Verifier is Constants {
             "Verifier.verifyKZG: _index is out of range"
         );
         require(
-            _value < BABYJUB_P,
-            "Verifier.verifyKZG: _value is out of range"
+            _value.X < BABYJUB_P,
+            "Verifier.verifyKZG: _value.X is out of range"
+        );
+        require(
+            _value.Y < BABYJUB_P,
+            "Verifier.verifyKZG: _value.Y is out of range"
         );
 
-        // Check that
-        //     e(commitment - aCommit, G2.g) == e(proof, xCommit - zCommit)
-        //     e(commitment - aCommit, G2.g) / e(proof, xCommit - zCommit) == 1
-        //     e(commitment - aCommit, G2.g) * e(proof, xCommit - zCommit) ^ -1 == 1
-        //     e(commitment - aCommit, G2.g) * e(-proof, xCommit - zCommit) == 1
-        // where:
-        //     aCommit = commit([_value]) = SRS_G1_0 * _value
-        //     xCommit = commit([0, 1]) = SRS_G2_1
-        //     zCommit = commit([_index]) = SRS_G2_1 * _index
-
-        // To avoid having to perform an expensive operation in G2 to compute
-        // xCommit - zCommit, we instead check the equivalent equation:
-        //     e(commitment - aCommit, G2.g) * e(-proof, xCommit) * e(-proof, -zCommit) == 1
-        //     e(commitment - aCommit, G2.g) * e(-proof, xCommit) * e(proof, zCommit) == 1
-        //     e(commitment - aCommit, G2.g) * e(-proof, xCommit) * e(index * proof, G2.g) == 1
-        //     e((index * proof) + (commitment - aCommit), G2.g) * e(-proof, xCommit) == 1
-
-        // Compute commitment - aCommitment
-        Pairing.G1Point memory commitmentMinusA = Pairing.plus(
-            _commitment,
-            Pairing.negate(Pairing.mulScalar(SRS_G1_0, _value))
+        // Compute proof * index - value
+        Pairing.G1Point memory proofMulIndexMinusValue = Pairing.plus(
+            Pairing.mulScalar(_proof, _index),
+            Pairing.negate(_value)
         );
 
         // Negate the proof
         Pairing.G1Point memory negProof = Pairing.negate(_proof);
 
-        // Compute index * proof
-        Pairing.G1Point memory indexMulProof = Pairing.mulScalar(
-            _proof,
-            _index
-        );
-
         // Returns true if and only if
-        // e((index * proof) + (commitment - aCommitment), G2.g) * e(-proof, xCommit) == 1
+        // e(commitment, pk2) * e(-proof, g2^\alpha) * e((proof * index - value), g2) == 1
         return
-            Pairing.pairing(
-                Pairing.plus(indexMulProof, commitmentMinusA),
-                g2Generator,
+            pairing2(
+                _commitment,
+                _pk2,
                 negProof,
-                SRS_G2_1
+                SRS_G2_1,
+                proofMulIndexMinusValue,
+                g2Generator
             );
     }
 
-    /*
-     * @return A KZG commitment to a polynominal
-     * @param coefficients The coefficients of the polynomial to which to
-     *                     commit.
-     */
-    function commit(uint256[] memory coefficients)
-        public
-        view
-        returns (Pairing.G1Point memory)
-    {
-        Pairing.G1Point memory result = Pairing.G1Point(0, 0);
+    function pairing2(
+        Pairing.G1Point memory a1,
+        Pairing.G2Point memory a2,
+        Pairing.G1Point memory b1,
+        Pairing.G2Point memory b2,
+        Pairing.G1Point memory c1,
+        Pairing.G2Point memory c2
+    ) internal view returns (bool) {
+        Pairing.G1Point[3] memory p1 = [a1, b1, c1];
+        Pairing.G2Point[3] memory p2 = [a2, b2, c2];
 
-        for (uint256 i = 0; i < coefficients.length; i++) {
-            result = Pairing.plus(
-                result,
-                Pairing.mulScalar(
-                    Pairing.G1Point({
-                        X: Constants.SRS_G1_X[i],
-                        Y: Constants.SRS_G1_Y[i]
-                    }),
-                    coefficients[i]
-                )
-            );
+        uint256 inputSize = 18;
+        uint256[] memory input = new uint256[](inputSize);
+
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 j = i * 6;
+            input[j + 0] = p1[i].X;
+            input[j + 1] = p1[i].Y;
+            input[j + 2] = p2[i].X[0];
+            input[j + 3] = p2[i].X[1];
+            input[j + 4] = p2[i].Y[0];
+            input[j + 5] = p2[i].Y[1];
         }
-        return result;
-    }
 
-    /*
-     * @return The polynominal evaluation of a polynominal with the specified
-     *         coefficients at the given index.
-     */
-    function evalPolyAt(uint256[] memory _coefficients, uint256 _index)
-        public
-        pure
-        returns (uint256)
-    {
-        uint256 m = Constants.BABYJUB_P;
-        uint256 result = 0;
-        uint256 powerOfX = 1;
+        uint256[1] memory out;
+        bool success;
 
-        for (uint256 i = 0; i < _coefficients.length; i++) {
-            uint256 coeff = _coefficients[i];
-            assembly {
-                result := addmod(result, mulmod(powerOfX, coeff, m), m)
-                powerOfX := mulmod(powerOfX, _index, m)
-            }
+        // solium-disable-next-line security/no-inline-assembly
+        assembly {
+            success := staticcall(
+                sub(gas, 2000),
+                8,
+                add(input, 0x20),
+                mul(inputSize, 0x20),
+                out,
+                0x20
+            )
+            // Use "invalid" to make gas estimation work
+            switch success
+                case 0 {
+                    invalid()
+                }
         }
-        return result;
+
+        require(success, "pairing-opcode-failed");
+
+        return out[0] != 0;
     }
 
     /*
@@ -275,11 +243,6 @@ contract Verifier is Constants {
             );
     }
 
-    // Uncomment to perform gas benchmarks
-    function commitBenchmark(uint256[] memory _coefficients) public {
-        commit(_coefficients);
-    }
-
     function verifyMultiBenchmark(
         Pairing.G1Point memory _commitment,
         Pairing.G2Point memory _proof,
@@ -295,14 +258,59 @@ contract Verifier is Constants {
         Pairing.G1Point memory _commitment,
         Pairing.G1Point memory _proof,
         uint256 _index,
-        uint256 _value
+        Pairing.G1Point memory _value,
+        Pairing.G2Point memory _pk2
     ) public {
-        verify(_commitment, _proof, _index, _value);
+        verify(_commitment, _proof, _index, _value, _pk2);
     }
 
-    function evalPolyAtBenchmark(uint256[] memory _coefficients, uint256 _index)
+    /*
+     * @return A KZG commitment to a polynominal
+     * @param coefficients The coefficients of the polynomial to which to
+     *                     commit.
+     */
+    function commit(uint256[] memory coefficients)
         public
+        view
+        returns (Pairing.G1Point memory)
     {
-        evalPolyAt(_coefficients, _index);
+        Pairing.G1Point memory result = Pairing.G1Point(0, 0);
+
+        for (uint256 i = 0; i < coefficients.length; i++) {
+            result = Pairing.plus(
+                result,
+                Pairing.mulScalar(
+                    Pairing.G1Point({
+                        X: Constants.SRS_G1_X[i],
+                        Y: Constants.SRS_G1_Y[i]
+                    }),
+                    coefficients[i]
+                )
+            );
+        }
+        return result;
+    }
+
+    /*
+     * @return The polynominal evaluation of a polynominal with the specified
+     *         coefficients at the given index.
+     */
+    function evalPolyAt(uint256[] memory _coefficients, uint256 _index)
+        public
+        pure
+        returns (uint256)
+    {
+        uint256 m = Constants.BABYJUB_P;
+        uint256 result = 0;
+        uint256 powerOfX = 1;
+
+        for (uint256 i = 0; i < _coefficients.length; i++) {
+            uint256 coeff = _coefficients[i];
+            assembly {
+                result := addmod(result, mulmod(powerOfX, coeff, m), m)
+                powerOfX := mulmod(powerOfX, _index, m)
+            }
+        }
+        return result;
     }
 }

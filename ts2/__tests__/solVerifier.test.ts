@@ -12,7 +12,7 @@ import {
     verifyMulti,
     genVerifierContractParams,
     genMultiVerifierContractParams,
-} from '../'
+} from '../index1'
 
 const mnemonic =
     'candy maple cake sugar pudding cream honey rich smooth crumble sweet treat'

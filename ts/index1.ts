@@ -33,6 +33,14 @@ const genBabyJubField = () => {
 const srsg1DataRaw = require('@libkzg/taug1_65536.json')
 const srsg2DataRaw = require('@libkzg/taug2_65536.json')
 
+const getPKInG1 = (sk: BigInt): G1Point => {
+    return G1.affine(G1.mulScalar(srsG1(1)[0], sk))
+}
+
+const getPKInG2 = (sk: BigInt): G2Point => {
+    return G2.affine(G2.mulScalar(srsG2(1)[0], sk))
+}
+
 /*
  * @return Up to 65536 G1 values of the structured reference string.
  * These values were taken from challenge file #46 of the Perpetual Powers of
@@ -139,6 +147,13 @@ const polyCommit = (
     return result
 }
 
+const commit2 = (
+    coefficients: bigint[],
+    srs: G1Point[]
+): Commitment => {
+    return polyCommit(coefficients, G1, srs)
+}
+
 /*
  * @return A the coefficients to the quotient polynomial used to generate a
  *         KZG proof.
@@ -177,10 +192,11 @@ const genQuotientPolynomial = (
 const genProof = (
     coefficients: Coefficient[],
     index: number | bigint,
+    srs: G1Point[],
     p: bigint = FIELD_SIZE,
 ): Proof => {
     const quotient = genQuotientPolynomial(coefficients, BigInt(index), p)
-    return commit(quotient)
+    return commit2(quotient, srs)
 }
 
 const genZeroPoly = (
@@ -239,6 +255,7 @@ const genInterpolatingPoly = (
 const genMultiProof = (
     coefficients: Coefficient[],
     indices: number[] | bigint[],
+    srs: G2Point[],
     p: bigint = FIELD_SIZE,
 ): MultiProof => {
     assert(coefficients.length > indices.length)
@@ -254,7 +271,7 @@ const genMultiProof = (
     )
 
     const qPolyCoeffs = qPoly.toValues()
-    const multiProof = polyCommit(qPolyCoeffs, G2, srsG2(qPolyCoeffs.length))
+    const multiProof = polyCommit(qPolyCoeffs, G2, srs)
 
     return multiProof
 }
@@ -354,7 +371,8 @@ const verifyViaEIP197 = (
     commitment: Commitment,
     proof: Proof,
     index: number | bigint,
-    value: bigint,
+    value: G1Point,
+    pk2: G2Point,
     p: bigint = FIELD_SIZE,
 ) => {
     // Check that:
@@ -367,28 +385,28 @@ const verifyViaEIP197 = (
     const field = galois.createPrimeField(p)
     const srs = srsG2(2)
 
-    const a = field.newVectorFrom([value].map(BigInt))
-    const aCommit = commit(a.toValues())
     const x = field.newVectorFrom([0, 1].map(BigInt))
     const xCommit = polyCommit(x.toValues(), G2, srs)
-
-    const z = field.newVectorFrom([index].map(BigInt))
-    const zCommit = polyCommit(z.toValues(), G2, srs)
 
     const inputs = [
         {
             G1: G1.affine(
-                G1.add(
-                    G1.mulScalar(proof, index),
-                    G1.sub(commitment, aCommit),
-                )
+                commitment
             ),
-            G2: G2.g,
+            G2: pk2,
         },
         {
             G1: G1.affine(G1.neg(proof)),
-            G2: xCommit,
+            G2: srs[1],
         },
+        {
+            G1: G1.affine(G1.mulScalar(proof, index)),
+            G2: G2.g,
+        },
+        {
+            G1: G1.affine(G1.neg(value)),
+            G2: G2.g,
+        }
     ]
 
     return isValidPairing(inputs)
@@ -398,7 +416,8 @@ const genVerifierContractParams = (
     commitment: Commitment,
     proof: Proof,
     index: number | bigint,
-    value: bigint,
+    value: G1Point,
+    pk2: G2Point,
 ) => {
     return {
         commitment: [
@@ -410,7 +429,20 @@ const genVerifierContractParams = (
             '0x' + proof[1].toString(16),
         ],
         index: '0x' + BigInt(index).toString(16),
-        value: '0x' + BigInt(value).toString(16),
+        value: [
+            '0x' + value[0].toString(16),
+            '0x' + value[1].toString(16),
+        ],
+        pk2: [
+            [
+                '0x' + pk2[0][1].toString(16),
+                '0x' + pk2[0][0].toString(16),
+            ],
+            [
+                '0x' + pk2[1][1].toString(16),
+                '0x' + pk2[1][0].toString(16),
+            ]
+        ]
     }
 }
 
@@ -538,13 +570,17 @@ const isValidPairing = (
     if (pairingResult.length === 0) {
         return false
     } else {
-        console.log('0x' + pairingResult.toString('hex'))
         return BigInt('0x' + pairingResult.toString('hex')) === BigInt(1)
     }
 }
 
 export {
     FIELD_SIZE,
+    srsG1,
+    srsG2,
+    getPKInG1,
+    getPKInG2,
+    commit2,
     genBabyJubField,
     genCoefficients,
     genQuotientPolynomial,

@@ -11,7 +11,9 @@
     "test": "jest --force-exit libkzg.test.ts",
     "test-debug": "node --inspect-brk ./node_modules/.bin/jest --testPathPattern=__tests__/libkzg.test.ts",
     "test-sol-verifier": "jest --force-exit solVerifier.test.ts",
-    "test-sol-verifier-debug": "node --inspect-brk ./node_modules/.bin/jest --testPathPattern=__tests__/solVerifier.test.ts"
+    "test-sol-verifier-debug": "node --inspect-brk ./node_modules/.bin/jest --testPathPattern=__tests__/solVerifier.test.ts",
+    "test1": "jest --force-exit libkzg1.test.ts",
+    "test1-sol-verifier": "jest --force-exit solVerifier1.test.ts"
   },
   "repository": {
     "type": "git",
