@@ -1,5 +1,7 @@
 # libkzg
 
+**fork from https://github.com/weijiekoh/libkzg**
+
 This is a Typescript library which implements the [KZG10 polynominal
 commitment](https://www.iacr.org/archive/asiacrypt2010/6477178/6477178.pdf)
 scheme.
