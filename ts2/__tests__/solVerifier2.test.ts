@@ -137,7 +137,7 @@ describe('Solidity verifier', () => {
         it('verify benchmarks', async () => {
             for (let i = 0; i < 1; i++) {
                 const proof = genProof(coefficients, i, srsForPK)
-                const yVal = values[i-65500]
+                const yVal = values[i]
                 const value = G1.affine(G1.mulScalar(pk, yVal))
                 const params = genVerifierContractParams(commitment, proof, i, value, pk)
 
