@@ -9,7 +9,7 @@ type G1Point = ec
 type G2Point = ec
 type Coefficient = bigint
 type Polynomial = Coefficient[]
-type Commitment = G1Point
+type Commitment = G2Point
 type Proof = G1Point
 type MultiProof = G2Point
 
@@ -32,6 +32,14 @@ const genBabyJubField = () => {
 
 const srsg1DataRaw = require('@libkzg/taug1_65536.json')
 const srsg2DataRaw = require('@libkzg/taug2_65536.json')
+
+const getPKInG1 = (sk: BigInt): G1Point => {
+    return G1.affine(G1.mulScalar(srsG1(1)[0], sk))
+}
+
+const getPKInG2 = (sk: BigInt): G2Point => {
+    return G2.affine(G2.mulScalar(srsG2(1)[0], sk))
+}
 
 /*
  * @return Up to 65536 G1 values of the structured reference string.
@@ -116,6 +124,13 @@ const commit = (
     return polyCommit(coefficients, G1, srs)
 }
 
+const commit2 = (
+    coefficients: bigint[],
+    srs: G1Point[]
+): Commitment => {
+    return polyCommit(coefficients, G1, srs)
+}
+
 const polyCommit = (
     coefficients: bigint[],
     G: G1Point | G2Point,
@@ -177,217 +192,53 @@ const genQuotientPolynomial = (
 const genProof = (
     coefficients: Coefficient[],
     index: number | bigint,
+    srs: G1Point[],
     p: bigint = FIELD_SIZE,
 ): Proof => {
     const quotient = genQuotientPolynomial(coefficients, BigInt(index), p)
-    return commit(quotient)
-}
-
-const genZeroPoly = (
-    field: galois.FiniteField,
-    indices: number[] | bigint[],
-): galois.Vector => {
-    let zPoly = field.newVectorFrom([
-        // @ts-ignore
-        field.mod(BigInt(-1) * BigInt(indices[0])),
-        BigInt(1),
-    ])
-
-    for (let i = 1; i < indices.length; i++) {
-        zPoly = field.mulPolys(
-            zPoly,
-            field.newVectorFrom([
-                BigInt(-1) * BigInt(indices[i]),
-                BigInt(1),
-            ]),
-        )
-    }
-
-    return zPoly
-}
-
-const genInterpolatingPoly = (
-    field: galois.FiniteField,
-    poly: galois.Vector,
-    indices: number[] | bigint[],
-): galois.Vector => {
-    const x: bigint[] = []
-    const values: bigint[] = []
-
-    for (let i = 0; i < indices.length; i++) {
-        const index = BigInt(indices[i])
-        const yVal = field.evalPolyAt(poly, index)
-        x.push(index)
-        values.push(yVal)
-    }
-
-    const iPoly = field.interpolate(
-        field.newVectorFrom(x),
-        field.newVectorFrom(values),
-    )
-
-    return iPoly
-}
-
-/*
- * @return A KZG commitment proof of evaluation at multiple points.
- * @param coefficients The coefficients of the polynomial associated with the
- *                     KZG commitment.
- * @param indices The x-values for the polynomial evaluation proof.
- * @param p The field size. Defaults to the BabyJub field size.
- */
-const genMultiProof = (
-    coefficients: Coefficient[],
-    indices: number[] | bigint[],
-    p: bigint = FIELD_SIZE,
-): MultiProof => {
-    assert(coefficients.length > indices.length)
-
-    const field = galois.createPrimeField(p)
-    const poly = field.newVectorFrom(coefficients)
-
-    const iPoly = genInterpolatingPoly(field, poly, indices)
-    const zPoly = genZeroPoly(field, indices)
-    const qPoly = field.divPolys(
-        field.subPolys(poly, iPoly),
-        zPoly,
-    )
-
-    const qPolyCoeffs = qPoly.toValues()
-    const multiProof = polyCommit(qPolyCoeffs, G2, srsG2(qPolyCoeffs.length))
-
-    return multiProof
-}
-
-/*
- * Returns true if the proof (that for the polynomial committed to, the
- * evaluation at the given indices equals the respective value) is valid, and
- * false otherwise.
- */
-const verifyMulti = (
-    commitment: Commitment,
-    proof: MultiProof,
-    indices: number[] | bigint[],
-    values: bigint[],
-    p: bigint = FIELD_SIZE,
-) => {
-    const field = galois.createPrimeField(p)
-    const xVals: bigint[] = []
-
-    for (let i = 0; i < indices.length; i++) {
-        const index = BigInt(indices[i])
-        xVals.push(index)
-    }
-    const iPoly = field.interpolate(
-        field.newVectorFrom(xVals),
-        field.newVectorFrom(values),
-    )
-    const zPoly = genZeroPoly(field, indices)
-
-    // e(proof, commit(zPoly)) = e(commitment - commit(iPoly), g)
-
-    const zCommit = commit(zPoly.toValues())
-    const iCommit = commit(iPoly.toValues())
-
-    const lhs = ffjavascript.bn128.pairing(
-        G1.affine(zCommit),
-        G2.affine(proof),
-    )
-
-    const rhs = ffjavascript.bn128.pairing(
-        G1.affine(G1.sub(commitment, iCommit)),
-        G2.g,
-    )
-
-    return ffjavascript.bn128.F12.eq(lhs, rhs)
-}
-
-/*
- * Returns true if the proof (that for the polynomial committed to, the
- * evaluation at the given index equals the given value) is valid, and false
- * otherwise.
- */
-const verify = (
-    commitment: Commitment,
-    proof: Proof,
-    index: number | bigint,
-    value: bigint,
-    p: bigint = FIELD_SIZE,
-): boolean => {
-    // To verify the proof, use the following equation:
-    // (p - a) == proof * (x - z)
-    // (p - a) / (x - z) == proof
-
-    // Check that 
-    // e(commitment - aCommit, G2.g) == e(proof, xCommit - zCommit)
-    //
-    // xCommit = commit([0, 1]) = SRS_G2_1
-    // zCommit = commit([_index]) = SRS_G2_1 * _index
-    // e((index * proof) + (commitment - aCommit), G2.g) == e(proof, xCommit)
-    //
-    index = BigInt(index)
-    const field = galois.createPrimeField(p)
-    const srs = srsG2(2)
-
-    const aCommit = commit([BigInt(value)])
-    const xCommit = srs[1] // polyCommit(x.toValues(), G2, srs)
-
-    const lhs = ffjavascript.bn128.pairing(
-        G1.affine(
-            G1.add(
-                G1.mulScalar(proof, index), // index * proof
-                G1.sub(commitment, aCommit), // commitment - aCommit
-            ),
-        ),
-        G2.g,
-    )
-
-    const rhs = ffjavascript.bn128.pairing(
-        G1.affine(proof),
-        srs[1], // xCommit
-    )
-
-    return ffjavascript.bn128.F12.eq(lhs, rhs)
+    return polyCommit(quotient, G1, srs)
 }
 
 const verifyViaEIP197 = (
     commitment: Commitment,
     proof: Proof,
     index: number | bigint,
-    value: bigint,
-    p: bigint = FIELD_SIZE,
+    value: G1Point,
+    pk: G1Point,
 ) => {
-    // Check that:
-    // e(commitment - aCommitment, G2.g) == e(proof, xCommit - yCommit)
-    // which is equivalent to
-    // e(commitment - aCommitment, G2.g) * e(-proof, xCommit) * e(index * proof, G2.g) == 1
-    // which is equivalent to
-    // e((index * proof) + (commitment - aCommitment), G2.g) * e(-proof, xCommit) == 1
-    // as this is what the Solidity verifier needs to check
-    const field = galois.createPrimeField(p)
-    const srs = srsG2(2)
+    const g2Alpha = srsG2(2)[1]
+    const g2r = G2.affine(G2.mulScalar(G2.g, index))
 
-    const a = field.newVectorFrom([value].map(BigInt))
-    const aCommit = commit(a.toValues())
-    const x = field.newVectorFrom([0, 1].map(BigInt))
-    const xCommit = polyCommit(x.toValues(), G2, srs)
-
-    const z = field.newVectorFrom([index].map(BigInt))
-    const zCommit = polyCommit(z.toValues(), G2, srs)
-
+    // const inputs = [
+    //     {
+    //         G2: commitment,
+    //         G1: pk,
+    //     },
+    //     {
+    //         G2: G2.affine(G2.sub(g2r, g2Alpha)),
+    //         G1: G1.affine(proof),
+    //     },
+    //     {
+    //         G2: G2.affine(G2.neg(G2.g)),
+    //         G1: value,
+    //     },
+    // ]
     const inputs = [
         {
-            G1: G1.affine(
-                G1.add(
-                    G1.mulScalar(proof, index),
-                    G1.sub(commitment, aCommit),
-                )
-            ),
-            G2: G2.g,
+            G2: commitment,
+            G1: pk,
         },
         {
+            G2: G2.affine(g2r),
+            G1: proof,
+        },
+        {
+            G2: G2.affine(g2Alpha),
             G1: G1.affine(G1.neg(proof)),
-            G2: xCommit,
+        },
+        {
+            G2: G2.g,
+            G1: G1.affine(G1.neg(value)),
         },
     ]
 
@@ -398,62 +249,33 @@ const genVerifierContractParams = (
     commitment: Commitment,
     proof: Proof,
     index: number | bigint,
-    value: bigint,
+    value: G1Point,
+    pk: G1Point
 ) => {
     return {
         commitment: [
-            '0x' + commitment[0].toString(16),
-            '0x' + commitment[1].toString(16),
+            [
+                '0x' + commitment[0][1].toString(16),
+                '0x' + commitment[0][0].toString(16),
+            ],
+            [
+                '0x' + commitment[1][1].toString(16),
+                '0x' + commitment[1][0].toString(16),
+            ]
         ],
         proof: [
             '0x' + proof[0].toString(16),
             '0x' + proof[1].toString(16),
         ],
         index: '0x' + BigInt(index).toString(16),
-        value: '0x' + BigInt(value).toString(16),
-    }
-}
-
-const genMultiVerifierContractParams = (
-    commitment: Commitment,
-    proof: MultiProof,
-    indices: number[] | bigint[],
-    values: bigint[],
-    p: bigint = FIELD_SIZE,
-) => {
-    assert(indices.length <= MAX_G1_SOL_POINTS)
-
-    const field = galois.createPrimeField(p)
-    const xVals: bigint[] = []
-    for (let i of indices) {
-        xVals.push(BigInt(i))
-    }
-
-    const iPoly = field.interpolate(
-        field.newVectorFrom(xVals),
-        field.newVectorFrom(values),
-    )
-    const zPoly = genZeroPoly(field, indices)
-
-    return {
-        commitment: [
-            '0x' + commitment[0].toString(16),
-            '0x' + commitment[1].toString(16),
+        value: [
+            '0x' + value[0].toString(16),
+            '0x' + value[1].toString(16),
         ],
-        proof: [
-            [
-                '0x' + proof[0][1].toString(16),
-                '0x' + proof[0][0].toString(16),
-            ],
-            [
-                '0x' + proof[1][1].toString(16),
-                '0x' + proof[1][0].toString(16),
-            ]
-        ],
-        indices: xVals.map((x) => '0x' + BigInt(x).toString(16)),
-        values: values.map((x) => '0x' + BigInt(x).toString(16)),
-        iCoeffs: iPoly.toValues().map((x) => '0x' + BigInt(x).toString(16)),
-        zCoeffs: zPoly.toValues().map((x) => '0x' + BigInt(x).toString(16)),
+        pk: [
+            '0x' + pk[0].toString(16),
+            '0x' + pk[1].toString(16),
+        ]
     }
 }
 
@@ -538,7 +360,6 @@ const isValidPairing = (
     if (pairingResult.length === 0) {
         return false
     } else {
-        console.log('0x' + pairingResult.toString('hex'))
         return BigInt('0x' + pairingResult.toString('hex')) === BigInt(1)
     }
 }
@@ -549,17 +370,18 @@ export {
     genCoefficients,
     genQuotientPolynomial,
     commit,
+    commit2,
     genProof,
-    genMultiProof,
-    verify,
     verifyViaEIP197,
-    verifyMulti,
     genVerifierContractParams,
-    genMultiVerifierContractParams,
     isValidPairing,
+    getPKInG1,
+    getPKInG2,
+    srsG1,
+    srsG2,
+    polyCommit,
     Coefficient,
     Polynomial,
     Commitment,
-    genZeroPoly,
     Proof,
 }

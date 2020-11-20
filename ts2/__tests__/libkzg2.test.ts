@@ -3,21 +3,17 @@ import {
     genCoefficients,
     genQuotientPolynomial,
     genProof,
-    genMultiProof,
-    verify,
-    verifyMulti,
     verifyViaEIP197,
     isValidPairing,
     genVerifierContractParams,
-    genMultiVerifierContractParams,
     genBabyJubField,
     commit,
-    genZeroPoly,
     getPKInG1,
     getPKInG2,
-    commit2,
-    srsG1
-} from '../index1'
+    srsG1,
+    srsG2,
+    polyCommit
+} from '../'
 
 import * as galois from '@guildofweavers/galois'
 import { bn128 } from 'ffjavascript'
@@ -39,15 +35,14 @@ const field = genBabyJubField()
 const coefficients = [5, 0, 2, 1].map(BigInt)
 
 describe('libkzg', () => {
-    describe('commit, prove, and verify the polynomial [5, 0, 2 1]', () => {
+    describe('commit, prove, and verify the polynomial [5, 0, 2, 1]', () => {
         let proof
         let commitment
         const xVal = BigInt(6)
         let yVal
         const sk = field.rand()
         // const sk = BigInt(1)
-        const pk1 = getPKInG1(sk)
-        const pk2 = getPKInG2(sk)
+        const pk = getPKInG1(sk)
 
         const srsForPK = srsG1(129)
         for (let i = 0; i < srsForPK.length; i++) {
@@ -71,11 +66,7 @@ describe('libkzg', () => {
         })
 
         it('generate a KZG commitment', () => {
-            commitment = commit(coefficients)
-            // const commitment2 = commit(coefficients)
-            // expect(commitment[0]).toEqual(commitment2[0])
-            // expect(commitment[1]).toEqual(commitment2[1])
-            // expect(commitment[2]).toEqual(commitment2[2])
+            commitment = polyCommit(coefficients, G2, srsG2(coefficients.length))
             expect(commitment.length === 3).toBeTruthy()
         })
 
@@ -94,7 +85,7 @@ describe('libkzg', () => {
 
         it('verify a KZG proof', () => {
 
-            const value = G1.affine(G1.mulScalar(pk1, yVal))
+            const value = G1.affine(G1.mulScalar(pk, yVal))
 
             expect(
                 verifyViaEIP197(
@@ -102,7 +93,7 @@ describe('libkzg', () => {
                     proof,
                     xVal,
                     value,
-                    pk2
+                    pk
                 )
             ).toBeTruthy()
 
@@ -116,7 +107,7 @@ describe('libkzg', () => {
                     ],
                     xVal,
                     value,
-                    pk2
+                    pk
                 )
             ).toBeFalsy()
         })
@@ -130,12 +121,12 @@ describe('libkzg', () => {
                     values.push(value)
                 }
                 const coefficients = genCoefficients(values)
-                const commitment = commit(coefficients)
+                const commitment = polyCommit(coefficients, G2, srsG2(coefficients.length))
                 const xVal = BigInt(6)
                 const yVal = field.evalPolyAt(field.newVectorFrom(coefficients), xVal)
-                const value = G1.affine(G1.mulScalar(pk1, yVal))
+                const value = G1.affine(G1.mulScalar(pk, yVal))
                 const proof = genProof(coefficients, xVal, srsForPK)
-                const isValid = verifyViaEIP197(commitment, proof, xVal, value, pk2)
+                const isValid = verifyViaEIP197(commitment, proof, xVal, value, pk)
                 expect(isValid).toBeTruthy()
             })
         })

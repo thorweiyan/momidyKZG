@@ -13,7 +13,9 @@
     "test-sol-verifier": "jest --force-exit solVerifier.test.ts",
     "test-sol-verifier-debug": "node --inspect-brk ./node_modules/.bin/jest --testPathPattern=__tests__/solVerifier.test.ts",
     "test1": "jest --force-exit libkzg1.test.ts",
-    "test1-sol-verifier": "jest --force-exit solVerifier1.test.ts"
+    "test1-sol-verifier": "jest --force-exit solVerifier1.test.ts",
+    "test2": "jest --force-exit libkzg2.test.ts",
+    "test2-sol-verifier": "jest --force-exit solVerifier2.test.ts"
   },
   "repository": {
     "type": "git",

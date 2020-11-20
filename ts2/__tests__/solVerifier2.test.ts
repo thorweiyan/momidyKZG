@@ -1,5 +1,5 @@
 jest.setTimeout(90000)
-const Verifier2 = require('../../compiled/Verifier2.json')
+const Verifier = require('../../compiled/Verifier.json')
 import * as ethers from 'ethers'
 import * as etherlime from 'etherlime-lib'
 import {
@@ -8,19 +8,18 @@ import {
     commit,
     commit2,
     genProof,
-    genMultiProof,
-    verify,
-    verifyMulti,
     genVerifierContractParams,
-    genMultiVerifierContractParams,
     srsG1,
+    srsG2,
     getPKInG1,
     getPKInG2,
-    verifyViaEIP197
-} from '../index1'
+    verifyViaEIP197,
+    polyCommit
+} from '../'
 
 import { bn128 } from 'ffjavascript'
 const G1 = bn128.G1
+const G2 = bn128.G2
 
 const mnemonic =
     'candy maple cake sugar pudding cream honey rich smooth crumble sweet treat'
@@ -54,20 +53,17 @@ describe('Solidity verifier', () => {
     const degree = 10
     let coefficients
     let sk
-    let pk1
-    let pk2
+    let pk
     let srsForPK
 
     beforeAll(async () => {
         verifierContract = await deployer.deploy(
-            Verifier2,
+            Verifier,
             {},
         )
 
         sk = field.rand()
-        // sk = BigInt(1)
-        pk1 = getPKInG1(sk)
-        pk2 = getPKInG2(sk)
+        pk = getPKInG1(sk)
         srsForPK = srsG1(129)
         for (let i = 0; i < srsForPK.length; i++) {
             srsForPK[i] = G1.affine(G1.mulScalar(srsForPK[i], sk))
@@ -79,7 +75,7 @@ describe('Solidity verifier', () => {
         }
 
         coefficients = genCoefficients(values)
-        commitment = commit(coefficients)
+        commitment = polyCommit(coefficients, G2, srsG2(coefficients.length))
     })
 
     describe('single-point proof verification', () => {
@@ -87,18 +83,18 @@ describe('Solidity verifier', () => {
             for (let i = 1; i < degree; i++) {
                 const proof = genProof(coefficients, i, srsForPK)
                 const yVal = values[i]
-                const value = G1.affine(G1.mulScalar(pk1, yVal))
-                const isValid = verifyViaEIP197(commitment, proof, i, value, pk2)
+                const value = G1.affine(G1.mulScalar(pk, yVal))
+                const isValid = verifyViaEIP197(commitment, proof, i, value, pk)
                 expect(isValid).toBeTruthy()
 
-                const params = genVerifierContractParams(commitment, proof, i, value, pk2)
+                const params = genVerifierContractParams(commitment, proof, i, value, pk)
 
                 const result = await verifierContract.verify(
                     params.commitment,
                     params.proof,
                     params.index,
                     params.value,
-                    params.pk2,
+                    params.pk,
                 )
                 expect(result).toBeTruthy()
             }
@@ -108,15 +104,15 @@ describe('Solidity verifier', () => {
             const i = 0
             const proof = genProof(coefficients, i, srsForPK)
             const yVal = values[i]
-            const value = G1.affine(G1.mulScalar(pk1, yVal))
-            const params = genVerifierContractParams(commitment, proof, i, value, pk2)
+            const value = G1.affine(G1.mulScalar(pk, yVal))
+            const params = genVerifierContractParams(commitment, proof, i, value, pk)
 
             const result = await verifierContract.verify(
                 params.commitment,
                 ['0x0', '0x0'],
                 params.index,
                 params.value,
-                params.pk2,
+                params.pk,
             )
             expect(result).toBeFalsy()
         })
@@ -125,36 +121,67 @@ describe('Solidity verifier', () => {
             const i = 0
             const proof = genProof(coefficients, i, srsForPK)
             const yVal = values[i]
-            const value = G1.affine(G1.mulScalar(pk1, yVal))
-            const params = genVerifierContractParams(commitment, proof, i, value, pk2)
+            const value = G1.affine(G1.mulScalar(pk, yVal))
+            const params = genVerifierContractParams(commitment, proof, i, value, pk)
 
             const result = await verifierContract.verify(
-                ['0x0', '0x0'],
+                [['0x0', '0x0'],['0x0', '0x0']],
                 params.proof,
                 params.index,
                 params.value,
-                params.pk2,
+                params.pk,
             )
             expect(result).toBeFalsy()
         })
 
         it('verify benchmarks', async () => {
-            for (let i = 0; i < degree; i++) {
+            for (let i = 0; i < 1; i++) {
                 const proof = genProof(coefficients, i, srsForPK)
-                const yVal = values[i]
-                const value = G1.affine(G1.mulScalar(pk1, yVal))
-                const params = genVerifierContractParams(commitment, proof, i, value, pk2)
+                const yVal = values[i-65500]
+                const value = G1.affine(G1.mulScalar(pk, yVal))
+                const params = genVerifierContractParams(commitment, proof, i, value, pk)
 
                 const tx = await verifierContract.verifyBenchmark(
                     params.commitment,
                     params.proof,
                     params.index,
                     params.value,
-                    params.pk2,
+                    params.pk,
                 )
                 const response = await tx.wait()
                 console.log(response.gasUsed.toString())
             }
+        })
+    })
+
+    describe('commit, prove, and verify a random polynomial', () => {
+        it('generate a valid proof', async () => {
+            const degree = 128
+            const values: bigint[] = []
+            for (let i = 0; i < degree; i++) {
+                const value = field.rand()
+                values.push(value)
+            }
+            const coefficients = genCoefficients(values)
+            const commitment = polyCommit(coefficients, G2, srsG2(coefficients.length))
+            const xVal = BigInt(6)
+            const yVal = field.evalPolyAt(field.newVectorFrom(coefficients), xVal)
+            const value = G1.affine(G1.mulScalar(pk, yVal))
+            const proof = genProof(coefficients, xVal, srsForPK)
+            const isValid = verifyViaEIP197(commitment, proof, xVal, value, pk)
+            expect(isValid).toBeTruthy()
+
+            const params = genVerifierContractParams(commitment, proof, xVal, value, pk)
+
+                const tx = await verifierContract.verifyBenchmark(
+                    params.commitment,
+                    params.proof,
+                    params.index,
+                    params.value,
+                    params.pk,
+                )
+                const response = await tx.wait()
+                console.log(response.gasUsed.toString())
         })
     })
 })
